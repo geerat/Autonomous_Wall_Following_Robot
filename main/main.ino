@@ -29,7 +29,7 @@
 
 //IR SENSOR VARIABLE
 #define KALMAN_CONSTANT 0.9
-int irSensor[3] = {A3,A2,A4} ;     //sensor is attached
+int irSensor[3] = {A2,A3,A4} ;     //sensor is attached
 double prevEstimate[3]={0.0,0.0,0.0};
 double sensorConstant[3]={36291,36731,3631.7};
 double sensorPow[3]={-1.11,-1.106,-0.89};
@@ -126,13 +126,15 @@ STATE initialising() {
   SerialCom->println("Enabling Motors...");
   enable_motors();
   SerialCom->println("RUNNING STATE...");
+
+  
   return RUNNING;
 }
 
 STATE running() {
 
   static unsigned long previous_millis;
-  IR_sensor();
+
   read_serial_command();
   fast_flash_double_LED_builtin();
 
@@ -140,6 +142,16 @@ STATE running() {
     previous_millis = millis();
 
     SerialCom->println("RUNNING---------");
+
+  SerialCom->println("SENSOR 1: ");
+  SerialCom->println(sensorReading(0));
+
+  SerialCom->println("SENSOR 2: ");
+  SerialCom->println(sensorReading(1));
+
+  SerialCom->println("SENSOR 3: ");
+  SerialCom->println(sensorReading(2));
+    
     speed_change_smooth();
     Analog_Range_A4();
 
@@ -222,26 +234,7 @@ void fast_flash_double_LED_builtin()
   }
 }
 
-void IR_sensor(){
-   if (SerialCom->available())           // Check for input from terminal
-   {
-     serialRead = SerialCom->read();     // Read input
-     if (serialRead==49)             // Check for flag to execute, 49 is ascii for 1, stop serial printing
-     {
-       SerialCom->end();                  // end the serial communication to display sensor data on monitor
-     }
-   }
-  
-  signalADC = analogRead(irsensor);   // the read out is a signal from 0-1023 corresponding to 0-5v
-  int distance1 = 17948*pow(signalADC,-1.22);  // calculate the distance using the datasheet graph 
-  int distancec = 46161*pow(signalADC,-1.302);  // calculate the distance using the calibrated graph
-  SerialCom->print("distance1  ");   // print the results out using serial print 
-  SerialCom->print(distance1);
-  SerialCom->println("cm ");
-  SerialCom->print("distancec  "); 
-  SerialCom->println(signalADC);
-  delay(300);
-}
+
 
 void slow_flash_LED_builtin()
 {
