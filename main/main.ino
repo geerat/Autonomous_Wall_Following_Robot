@@ -25,6 +25,20 @@
 #define NO_HC-SR04 //Uncomment of HC-SR04 ultrasonic ranging sensor is not attached.
 //#define NO_BATTERY_V_OK //Uncomment of BATTERY_V_OK if you do not care about battery damage.
 
+
+
+//IR SENSOR VARIABLE
+#define KALMAN_CONSTANT 0.9
+int irSensor[3] = {A3,A2,A4} ;     //sensor is attached
+double prevEstimate[3]={0.0,0.0,0.0};
+double sensorConstant[3]={36291,36731,3631.7};
+double sensorPow[3]={-1.11,-1.106,-0.89};
+
+//
+
+
+
+
 //State machine states
 enum STATE {
   INITIALISING,
@@ -506,3 +520,25 @@ void strafe_right ()
   right_rear_motor.writeMicroseconds(1500 - speed_val);
   right_font_motor.writeMicroseconds(1500 + speed_val);
 }
+
+/*
+   _____ _    _  _____ _______ ____  __  __            ______ _    _ _   _  _____ _______ _____ ____  _   _  _____ 
+  / ____| |  | |/ ____|__   __/ __ \|  \/  |          |  ____| |  | | \ | |/ ____|__   __|_   _/ __ \| \ | |/ ____|
+ | |    | |  | | (___    | | | |  | | \  / |  ______  | |__  | |  | |  \| | |       | |    | || |  | |  \| | (___  
+ | |    | |  | |\___ \   | | | |  | | |\/| | |______| |  __| | |  | | . ` | |       | |    | || |  | | . ` |\___ \ 
+ | |____| |__| |____) |  | | | |__| | |  | |          | |    | |__| | |\  | |____   | |   _| || |__| | |\  |____) |
+  \_____|\____/|_____/   |_|  \____/|_|  |_|          |_|     \____/|_| \_|\_____|  |_|  |_____\____/|_| \_|_____/ 
+                                                                                                                   
+*/                                                                                                                   
+
+
+//This function is used to get the distance measured by a particular IR Sensor
+//Input: int sensor_number - number between 0 - 2 to represent the sensor you want to read
+//Output: the distance read by the sensor
+double sensorReading(int sensorNumber){
+  int signalADC = analogRead(irSensor[sensorNumber]);   // the read out is a signal from 0-1023 corresponding to 0-5v
+  double distance = sensorConstant[sensorNumber]*pow(signalADC, sensorPow[sensorNumber]);  // calculate the distance using the calibrated graph
+  double newEstimate = distance*KALMAN_CONSTANT+(1-KALMAN_CONSTANT)*prevEstimate[sensorNumber];
+  prevEstimate[sensorNumber]=newEstimate;
+  return newEstimate;
+} 
