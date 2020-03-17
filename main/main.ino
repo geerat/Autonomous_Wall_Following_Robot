@@ -28,7 +28,7 @@
 
 
 //IR SENSOR VARIABLE
-#define KALMAN_CONSTANT 0.9
+#define KALMAN_CONSTANT 1
 int irSensor[3] = {A2,A3,A4} ;     //sensor is attached
 double prevEstimate[3]={0.0,0.0,0.0};
 double sensorConstant[3]={36291,36731,3631.7};
