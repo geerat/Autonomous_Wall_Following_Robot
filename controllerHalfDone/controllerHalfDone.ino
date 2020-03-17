@@ -24,6 +24,8 @@ double prevEy = 0.00;
 double runningEr = 0.00;
 double prevEr = 0.00;
 
+double kinematicArray[4][3] = {{1, 1, -(L2 + L1)}, {1, -1, (L1+L2)}, {1, -1, -(L1+L2)}, {1, 1, (L1+L2)}};
+
 void setup() {
   // put your setup code here, to run once:
 
@@ -68,13 +70,13 @@ double * motorController(double ex, double ey, double er) {
 
 double * getMotorPower(double V[3]) {
 
-  double kinematicArray[4][3] = {{1, 1, -(L2 + L1)}, {1, -1, (L1+L2)}, {1, -1, -(L1+L2)}, {1, 1, (L1+L2)}};
+  
   double motorPower[4] = {0.0, 0.0, 0.0, 0.0};
   
   for(int j = 0; j < 4; j++) {// rows
     for (int i = 0; i < 3; i++) { // columns
           
-        motorPower[j] = motorPower[j] + kinematicArray[j][i]*V[i];
+        motorPower[j] = motorPower[j] + ((kinematicArray[j][i]*V[i])/R);
      
     }
   }
