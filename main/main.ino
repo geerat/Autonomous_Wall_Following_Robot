@@ -17,8 +17,8 @@
   Date: 11/11/2016
   Author: Logan Stuart
   Modified: 15/02/2018
-  Author: Logan Stuart
 */
+
 #include <Servo.h>  //Need for Servo pulse output
 
 #define NO_READ_GYRO  //Uncomment of GYRO is not attached.
@@ -26,18 +26,48 @@
 //#define NO_BATTERY_V_OK //Uncomment of BATTERY_V_OK if you do not care about battery damage.
 
 
+// CONTROLLER VARIABLES
+
+#define KP_X 1
+#define KI_X 0.1
+#define KD_X 0.01
+
+#define KP_Y 1
+#define KI_Y 0.1
+#define KD_Y 0.01
+
+#define KP_R 1
+#define KI_R 0.1
+#define KD_R 0.01
+
+#define R 2.75
+#define L2 7.5
+#define L1 8.75
+
+
+double runningEx = 0.00;
+double prevEx = 0.00;
+
+double runningEy = 0.00;
+double prevEy = 0.00;
+
+double runningEr = 0.00;
+double prevEr = 0.00;
+
+double kinematicArray[4][3] = {{1, 1, -(L2 + L1)}, {1, -1, (L1+L2)}, {1, -1, -(L1+L2)}, {1, 1, (L1+L2)}};
+
+double ex, ey, er = 0;
+////
+
 
 //IR SENSOR VARIABLE
 #define KALMAN_CONSTANT 1
 int irSensor[3] = {A2,A3,A4} ;     //sensor is attached
-double prevEstimate[3]={0.0,0.0,0.0};
-double sensorConstant[3]={36291,36731,3631.7};
-double sensorPow[3]={-1.11,-1.106,-0.89};
+double prevEstimate[3]={0.0, 0.0, 0.0};
+double sensorConstant[3]={36291, 36731, 3631.7};
+double sensorPow[3]={-1.11, -1.106, -0.89};
 
 //
-
-
-
 
 //State machine states
 enum STATE {
@@ -143,14 +173,39 @@ STATE running() {
 
     SerialCom->println("RUNNING---------");
 
-  SerialCom->println("SENSOR 1: ");
-  SerialCom->println(sensorReading(0));
+    SerialCom->println("SENSOR 1: ");
+    SerialCom->println(sensorReading(0));
 
-  SerialCom->println("SENSOR 2: ");
-  SerialCom->println(sensorReading(1));
+    SerialCom->println("SENSOR 2: ");
+    SerialCom->println(sensorReading(1));
 
-  SerialCom->println("SENSOR 3: ");
-  SerialCom->println(sensorReading(2));
+    SerialCom->println("SENSOR 3: ");
+    SerialCom->println(sensorReading(2));
+
+
+    SerialCom->println("Errors - x, y, r");
+  
+    ex = 150 - ((sensorReading(0) + sensorReading(1))/2);
+    ey = 150 - sensorReading(2);
+    er = sensorReading(0) - sensorReading(1);
+
+    SerialCom->println("Errors - x, y, r");
+    SerialCom->println(ex);
+    SerialCom->println(ey);
+    SerialCom->println(er);
+
+    double * w = motorController(ex, ey, er);
+    
+    SerialCom->println("motor powers");
+    SerialCom->println(*w);
+    SerialCom->println(*(w+1));
+    SerialCom->println(*(w+2));
+    SerialCom->println(*(w+3));
+    
+    left_font_motor.writeMicroseconds(1500 - *w);
+    right_font_motor.writeMicroseconds(1500 - *(w+1));
+    left_rear_motor.writeMicroseconds(1500 - *(w+2));
+    right_rear_motor.writeMicroseconds(1500 - *(w+3));
     
     speed_change_smooth();
     Analog_Range_A4();
@@ -529,9 +584,87 @@ void strafe_right ()
 //Input: int sensor_number - number between 0 - 2 to represent the sensor you want to read
 //Output: the distance read by the sensor
 double sensorReading(int sensorNumber){
+  
+
+
   int signalADC = analogRead(irSensor[sensorNumber]);   // the read out is a signal from 0-1023 corresponding to 0-5v
+
+  if(signalADC == 0) {
+    signalADC = 1;
+  }
+
   double distance = sensorConstant[sensorNumber]*pow(signalADC, sensorPow[sensorNumber]);  // calculate the distance using the calibrated graph
-  double newEstimate = distance*KALMAN_CONSTANT+(1-KALMAN_CONSTANT)*prevEstimate[sensorNumber];
+  double newEstimate = distance*KALMAN_CONSTANT+(1-KALMAN_CONSTANT)*prevEstimate[sensorNumber] + 8;
+  
+  SerialCom->println("ADC: ");
+  SerialCom->println(signalADC);
+  SerialCom->println("distance: ");
+  SerialCom->println(distance);
+  SerialCom->println("newEstimate");
+  SerialCom->println(newEstimate);
+
   prevEstimate[sensorNumber]=newEstimate;
   return newEstimate;
 } 
+
+
+
+
+
+
+//TODO Combine x, y and r controller
+double * motorController(double ex, double ey, double er) {
+
+  double V[3] = {0.0, 0.0, 0.0}; //x, y, r
+  
+  //X Controller
+
+  runningEx = runningEx + ex;
+  
+  V[0] = ex*KP_X + runningEx*KI_X + (ex - prevEx)*KD_X;
+  prevEx = ex;
+
+
+  //Y Controller
+  runningEy = runningEy + ey;
+  
+  V[1] = ey*KP_Y + runningEy*KI_Y + (ey - prevEy)*KD_Y;
+  prevEy = ey;
+
+  //R Controller
+  runningEr = runningEr + er;
+  
+  V[2] = er*KP_R + runningEr*KI_R + (er - prevEr)*KD_R;
+  prevEr = er;
+
+  
+  return getMotorPower(V);
+}
+
+
+
+double * getMotorPower(double V[3]) {
+  
+  double motorPower[4] = {0.0, 0.0, 0.0, 0.0};
+  
+  for(int j = 0; j < 4; j++) {// rows
+    for (int i = 0; i < 3; i++) { // columns
+          
+        motorPower[j] = motorPower[j] + ((kinematicArray[j][i]*V[i])/R);
+     
+    }
+  }
+
+  for(int k = 0; k < 3; k++) {
+    
+    if(motorPower[k] > 200 ) {
+      motorPower[k] = 200;
+      SerialCom->println("SATURATE!!!");
+    } else if (motorPower[k] < -200) {
+      motorPower[k] = -200;
+      SerialCom->println("SATURATE!!!");
+    }
+    
+  }
+  return motorPower;
+}
