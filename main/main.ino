@@ -28,15 +28,15 @@
 
 // CONTROLLER VARIABLES
 
-#define KP_X 0
+#define KP_X 1
 #define KI_X 0
 #define KD_X 0.0
 
-#define KP_Y 0.5
+#define KP_Y 3
 #define KI_Y 0
 #define KD_Y 0
 
-#define KP_R 0.05
+#define KP_R 0.3
 #define KI_R 0
 #define KD_R 0
 
@@ -57,6 +57,11 @@ double prevEr = 0.00;
 double kinematicArray[4][3] = {{1, 1, -(L2 + L1)}, {1, -1, (L2+L1)}, {1, -1, -(L1+L2)}, {1, 1, (L1+L2)}};
 double w[4]={0,0,0,0};
 double ex, ey, er = 0;
+
+double distanceIR1 = 0;
+double distanceIR2 = 0;
+double distanceIR3 = 0;
+
 ////
 
 
@@ -169,6 +174,9 @@ STATE running() {
   fast_flash_double_LED_builtin();
 
   if (millis() - previous_millis > 500) {  //Arduino style 500ms timed execution statement
+
+    readIR(); //READ THE IR SENSOR
+    
     previous_millis = millis();
 
     SerialCom->println("RUNNING---------");
@@ -185,10 +193,22 @@ STATE running() {
 
     SerialCom->println("Errors - x, y, r");
 
-    ey = ((sensorReading(0) + sensorReading(1))/2)-150  ;
-    ex = sensorReading(2) - 150;
-    er = sensorReading(0) - sensorReading(1);
-/*
+    if(distanceIR1 == -1 || distanceIR2 == -1) {
+      ey = 0;
+      er = 0;
+    } else {
+       ey = ((distanceIR1 + distanceIR2)/2) - 77.5;
+       er = distanceIR2 - distanceIR1;
+    }
+
+    if(distanceIR3 == -1) {
+      ex = 0;
+    } else {
+      ex = 150 - distanceIR3;
+    }
+   
+    
+
     SerialCom->println("Errors - x, y, r");
     SerialCom->println(ex);
     SerialCom->println(ey);
@@ -201,7 +221,10 @@ STATE running() {
     SerialCom->println(w[1]);
     SerialCom->println(w[2]);
     SerialCom->println(w[3]);
-    
+
+
+    driveMotors();
+    /*
     left_font_motor.writeMicroseconds(1500 - w[0]);
     right_font_motor.writeMicroseconds(1500 - w[1]);
     left_rear_motor.writeMicroseconds(1500 - w[2]);
@@ -589,10 +612,10 @@ void strafe_right ()
 */                                                                                                                   
 
 //This function powers the motors with the required motor speeds
-void move() {
-    left_font_motor.writeMicroseconds(1500 - w[0]);
+void driveMotors() {
+    left_font_motor.writeMicroseconds(1500 + w[0]);
     right_font_motor.writeMicroseconds(1500 - w[1]);
-    left_rear_motor.writeMicroseconds(1500 - w[2]);
+    left_rear_motor.writeMicroseconds(1500 + w[2]);
     right_rear_motor.writeMicroseconds(1500 - w[3]);
 }
 
@@ -624,9 +647,8 @@ double sensorReading(int sensorNumber){
 
 
 //TODO Combine x, y and r controller
-void motorController(double ex, double ey, double er,double motorPower[4]) {
-
-  double V[3] = {0.0, 0.0, 0.0}; //x, y, r
+void motorController(double ex, double ey, double er, double motorPower[4]) {
+   double V[3] = {0.0, 0.0, 0.0}; //x, y, r
   
   //X Controller
 
@@ -648,6 +670,14 @@ void motorController(double ex, double ey, double er,double motorPower[4]) {
   V[2] = er*KP_R + runningEr*KI_R + (er - prevEr)*KD_R;
   prevEr = er;
 
+
+
+  if(V[0] > 400) {
+    V[0] = 400;
+  } else if (V[0] < -400) {
+    V[0] = -400;
+  }
+  
   SerialCom->println("Velocities:");
   SerialCom->println(V[0]);
   SerialCom->println(V[1]);
@@ -685,4 +715,27 @@ void getMotorPower(double V[3] ,double motorPower[4]) {
     }
     
   }
+}
+
+
+
+void readIR(){
+  distanceIR1 = sensorReading(0);
+  
+  distanceIR2 = sensorReading(1);
+  
+  distanceIR3 = sensorReading(2);
+
+ /* if(distanceIR1 > 700) {
+    distanceIR1 = -1;
+  }
+
+  if(distanceIR2 > 700) {
+    distanceIR2 = -1;
+  }
+
+  if(distanceIR3 > 2000) {
+    distanceIR3 = -1;
+  }*/
+
 }
