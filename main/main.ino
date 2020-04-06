@@ -77,7 +77,10 @@ double sensorPow[3]={-1.11, -1.106, -0.89};
 //State machine states
 enum STATE {
   INITIALISING,
-  RUNNING,
+  RUNNING_FORWARD,
+  RUNNING_TURNING,
+  RUNNING_ALIGN,
+  RUNNING_
   STOPPED
 };
 
@@ -91,7 +94,8 @@ const byte right_front = 51;
 int irsensor = A2;     //sensor is attached on pinA0
 byte serialRead = 0;  //for control serial communication 
 int signalADC = 0;  // the read out signal in 0-1023 corresponding to 0-5v 
-
+//VARIABLE ARRAY[X,Y,THETA]
+double coordinte[3]={0.0,0.0,0.0};
 
 
 //Default ultrasonic ranging sensor pins, these pins are defined my the Shield
@@ -141,6 +145,7 @@ void loop(void) //main loop
   static STATE machine_state = INITIALISING;
   //Finite-state machine Code
   switch (machine_state) {
+    
     case INITIALISING:
       machine_state = initialising();
       break;
@@ -179,20 +184,7 @@ STATE running() {
     
     previous_millis = millis();
 
-    SerialCom->println("RUNNING---------");
-    
-   SerialCom->println("SENSOR 1: ");
-    SerialCom->println(sensorReading(0));
-
-    SerialCom->println("SENSOR 2: ");
-    SerialCom->println(sensorReading(1));
-
-    SerialCom->println("SENSOR 3: ");
-    SerialCom->println(sensorReading(2));
-
-
-    SerialCom->println("Errors - x, y, r");
-
+    //Calculate errors
     if(distanceIR1 == -1 || distanceIR2 == -1) {
       ey = 0;
       er = 0;
@@ -200,37 +192,17 @@ STATE running() {
        ey = ((distanceIR1 + distanceIR2)/2) - 77.5;
        er = distanceIR2 - distanceIR1;
     }
-
+    
     if(distanceIR3 == -1) {
       ex = 0;
     } else {
       ex = 150 - distanceIR3;
     }
-   
-    
-
-    SerialCom->println("Errors - x, y, r");
-    SerialCom->println(ex);
-    SerialCom->println(ey);
-    SerialCom->println(er);
 
     motorController(ex, ey, er,w);
-    
-    SerialCom->println("motor powers");
-    SerialCom->println(w[0]);
-    SerialCom->println(w[1]);
-    SerialCom->println(w[2]);
-    SerialCom->println(w[3]);
-
 
     driveMotors();
-    /*
-    left_font_motor.writeMicroseconds(1500 - w[0]);
-    right_font_motor.writeMicroseconds(1500 - w[1]);
-    left_rear_motor.writeMicroseconds(1500 - w[2]);
-    right_rear_motor.writeMicroseconds(1500 - w[3]);
-    delay(500);
-    //speed_change_smooth();*/
+
     Analog_Range_A4();
 
 #ifndef NO_READ_GYRO
@@ -623,8 +595,6 @@ void driveMotors() {
 //Input: int sensor_number - number between 0 - 2 to represent the sensor you want to read
 //Output: the distance read by the sensor
 double sensorReading(int sensorNumber){
-  
-
 
   int signalADC = analogRead(irSensor[sensorNumber]);   // the read out is a signal from 0-1023 corresponding to 0-5v
 
@@ -633,17 +603,11 @@ double sensorReading(int sensorNumber){
   }
 
   double distance = sensorConstant[sensorNumber]*pow(signalADC, sensorPow[sensorNumber]);  // calculate the distance using the calibrated graph
-  double newEstimate = distance*KALMAN_CONSTANT+(1-KALMAN_CONSTANT)*prevEstimate[sensorNumber] + 8;
-  
-
+  double newEstimate = distance*KALMAN_CONSTANT+(1-KALMAN_CONSTANT)*prevEstimate[sensorNumber] + 8;//as per lectures kalman filter
 
   prevEstimate[sensorNumber]=newEstimate;
   return newEstimate;
 } 
-
-
-
-
 
 
 //TODO Combine x, y and r controller
@@ -651,26 +615,20 @@ void motorController(double ex, double ey, double er, double motorPower[4]) {
    double V[3] = {0.0, 0.0, 0.0}; //x, y, r
   
   //X Controller
-
   runningEx = runningEx + ex;
-  
   V[0] = ex*KP_X + runningEx*KI_X + (ex - prevEx)*KD_X;
   prevEx = ex;
 
 
   //Y Controller
   runningEy = runningEy + ey;
-  
   V[1] = ey*KP_Y + runningEy*KI_Y + (ey - prevEy)*KD_Y;
   prevEy = ey;
 
   //R Controller
   runningEr = runningEr + er;
-  
   V[2] = er*KP_R + runningEr*KI_R + (er - prevEr)*KD_R;
   prevEr = er;
-
-
 
   if(V[0] > 400) {
     V[0] = 400;
@@ -717,7 +675,14 @@ void getMotorPower(double V[3] ,double motorPower[4]) {
   }
 }
 
+void convertToCOordinate(r1,r2,r3){
+  //logic convert x,y,theta (move forward or align)
+}
 
+double convertToAngle(r1){
+
+  //logic to turn angle
+}
 
 void readIR(){
   distanceIR1 = sensorReading(0);
