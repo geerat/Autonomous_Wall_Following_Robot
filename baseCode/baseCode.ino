@@ -17,75 +17,18 @@
   Date: 11/11/2016
   Author: Logan Stuart
   Modified: 15/02/2018
+  Author: Logan Stuart
 */
-
 #include <Servo.h>  //Need for Servo pulse output
 
-#define NO_READ_GYRO  //Uncomment of GYRO is not attached.
-#define NO_HC-SR04 //Uncomment of HC-SR04 ultrasonic ranging sensor is not attached.
+//#define NO_READ_GYRO  //Uncomment of GYRO is not attached.
+//#define NO_HC-SR04 //Uncomment of HC-SR04 ultrasonic ranging sensor is not attached.
 //#define NO_BATTERY_V_OK //Uncomment of BATTERY_V_OK if you do not care about battery damage.
-
-
-// CONTROLLER VARIABLES
-
-#define KP_X 1
-#define KI_X 0
-#define KD_X 0.0
-
-#define KP_Y 3
-#define KI_Y 0
-#define KD_Y 0
-
-#define KP_R 0.3
-#define KI_R 0
-#define KD_R 0
-
-#define R 2.75
-#define L2 7.5
-#define L1 8.75
-
-
-double runningEx = 0.00;
-double prevEx = 0.00;
-
-double runningEy = 0.00;
-double prevEy = 0.00;
-
-double runningEr = 0.00;
-double prevEr = 0.00;
-
-double w[4]={0,0,0,0};
-double ex, ey, er = 0;
-
-double distanceIR1 = 0;
-double distanceIR2 = 0;
-double distanceIR3 = 0;
-
-////
-
-///FSM VARIABLES///
-bool aligned = false;
-bool completed = false;
-int wallCtr = 0;
-
-////////////////////
-
-
-//IR SENSOR VARIABLE
-#define KALMAN_CONSTANT 1
-int irSensor[3] = {A2,A3,A4} ;     //sensor is attached
-double prevEstimate[3]={0.0, 0.0, 0.0};
-double sensorConstant[3]={36291, 36731, 36317};
-double sensorPow[3]={-1.11, -1.106, -0.89};
-
-//
 
 //State machine states
 enum STATE {
   INITIALISING,
-  RUNNING_FORWARD,
-  RUNNING_TURNING,
-  RUNNING_ALIGN,
+  RUNNING,
   STOPPED
 };
 
@@ -96,11 +39,6 @@ const byte left_front = 46;
 const byte left_rear = 47;
 const byte right_rear = 50;
 const byte right_front = 51;
-int irsensor = A2;     //sensor is attached on pinA0
-byte serialRead = 0;  //for control serial communication 
-int signalADC = 0;  // the read out signal in 0-1023 corresponding to 0-5v 
-//VARIABLE ARRAY[X,Y,THETA]
-double coordinte[3]={0.0,0.0,0.0};
 
 
 //Default ultrasonic ranging sensor pins, these pins are defined my the Shield
@@ -146,26 +84,15 @@ void setup(void)
 
 void loop(void) //main loop
 {
-  
   static STATE machine_state = INITIALISING;
   //Finite-state machine Code
   switch (machine_state) {
-    
     case INITIALISING:
       machine_state = initialising();
       break;
-    case RUNNING_FORWARD:
-      machine_state = runningForward();
-      break;
-    case RUNNING_TURNING:
-      machine_state = runningTurning();
-      break;
-    case RUNNING_ALIGN:
-      machine_state = runningAlign();
-      break;
-   /* case RUNNING: //Lipo Battery Volage OK
+    case RUNNING: //Lipo Battery Volage OK
       machine_state =  running();
-      break;*/
+      break;
     case STOPPED: //Stop of Lipo Battery voltage is too low, to protect Battery
       machine_state =  stopped();
       break;
@@ -180,151 +107,44 @@ STATE initialising() {
   SerialCom->println("Enabling Motors...");
   enable_motors();
   SerialCom->println("RUNNING STATE...");
-
-  
-  return RUNNING_ALIGN;
-}
-
-STATE runningAlign() {
-
-  static unsigned long previous_millis; //this is the dumbest shit ever
-
-  fast_flash_double_LED_builtin();
-
-  if (millis() - previous_millis > 500) {  //Arduino style 500ms timed execution statement
-
-    readIR(); //READ THE IR SENSOR
-    previous_millis = millis();
-
-
-    // Poll the ir sensors, and run the controller with target angle = 0. 
-    // Set aligned = true, if angle error is close to 0
-    // could create a timeout to ensure controller is settled
-
-  }
-
-
-  if (!is_battery_voltage_OK()) return STOPPED;
-
-  if(aligned) {
-    wallCtr++;
-    return RUNNING_FORWARD;
-  }
-
-  return RUNNING_ALIGN;
-
-}
-
-STATE runningForward() {
-
-  static unsigned long previous_millis; //this is the dumbest shit ever
-
-  fast_flash_double_LED_builtin();
-
-  if (millis() - previous_millis > 500) {  //Arduino style 500ms timed execution statement
-
-    readIR(); //READ THE IR SENSOR
-    previous_millis = millis();
-
-    // Poll the ir sensors, and run the controller with target angle = 0, target x and y = 15cm - dimension of vehicle
-    // Set completed = true, if y error is close to 0
-
-  }
-
-
-  if (!is_battery_voltage_OK()) return STOPPED;
-
-  if(completed && wallCtr < 4) {
-    return RUNNING_TURNING;
-  } else if (completed && wallCtr > 3) {
-    return STOPPED;  //could create custom end state?
-  }
-
-  return RUNNING_FORWARD;
-}
-
-
-STATE runningTurning() {
-
-  static unsigned long previous_millis; //this is the dumbest shit ever
-
-  fast_flash_double_LED_builtin();
-
-  if (millis() - previous_millis > 500) {  //Arduino style 500ms timed execution statement
-
-    readIR(); //READ THE IR SENSOR
-    previous_millis = millis();
-
-    // ask salim and ahmad
-  }
-
-
-
-  if (!is_battery_voltage_OK()) return STOPPED; // check battery level
-
-
-
-  if(false /*angle reached for turn*/) {
-    completed = 0;
-    aligned = 0;
-    return RUNNING_ALIGN;
-  }
-
-  return RUNNING_TURNING;
+  return RUNNING;
 }
 
 STATE running() {
 
-  static unsigned long previous_millis; //this is the dumbest shit ever
+  static unsigned long previous_millis;
 
-  read_serial_command(); //removing keyboard control
+  read_serial_command();
   fast_flash_double_LED_builtin();
 
   if (millis() - previous_millis > 500) {  //Arduino style 500ms timed execution statement
-
-    readIR(); //READ THE IR SENSOR
-    
     previous_millis = millis();
 
-    //Calculate errors
-    if(distanceIR1 == -1 || distanceIR2 == -1) {
-      ey = 0;
-      er = 0;
-    } else {
-       ey = ((distanceIR1 + distanceIR2)/2) - 77.5;
-       er = distanceIR2 - distanceIR1;
-    }
-    
-    if(distanceIR3 == -1) {
-      ex = 0;
-    } else {
-      ex = 150 - distanceIR3;
-    }
-
-    motorController(ex, ey, er,w);
-
-    driveMotors();
-
+    SerialCom->println("RUNNING---------");
+    speed_change_smooth();
     Analog_Range_A4();
 
-    #ifndef NO_READ_GYRO
-      GYRO_reading();
-    #endif
+#ifndef NO_READ_GYRO
+    GYRO_reading();
+#endif
 
-    #ifndef NO_HC-SR04
-      HC_SR04_range();
-    #endif
+#ifndef NO_HC-SR04
+    HC_SR04_range();
+#endif
 
-    #ifndef NO_BATTERY_V_OK
-        if (!is_battery_voltage_OK()) return STOPPED;
-    #endif
+#ifndef NO_BATTERY_V_OK
+    if (!is_battery_voltage_OK()) return STOPPED;
+#endif
 
 
-    turret_motor.write(pos); //leaving all turret motor stuff out
+    turret_motor.write(pos);
 
-    if (pos == 0) {
+    if (pos == 0)
+    {
       pos = 45;
-    } else {
+    }
+    else
+    {
       pos = 0;
     }
   }
@@ -345,27 +165,29 @@ STATE stopped() {
     SerialCom->println("STOPPED---------");
 
 
-    #ifndef NO_BATTERY_V_OK
-      //500ms timed if statement to check lipo and output speed settings
-      if (is_battery_voltage_OK()) {
-        SerialCom->print("Lipo OK waiting of voltage Counter 10 < ");
-        SerialCom->println(counter_lipo_voltage_ok);
-        counter_lipo_voltage_ok++;
-        if (counter_lipo_voltage_ok > 10) { //Making sure lipo voltage is stable
-          counter_lipo_voltage_ok = 0;
-          enable_motors();
-          SerialCom->println("Lipo OK returning to RUN STATE");
-          return RUNNING;
-        }
-      } else {
+#ifndef NO_BATTERY_V_OK
+    //500ms timed if statement to check lipo and output speed settings
+    if (is_battery_voltage_OK()) {
+      SerialCom->print("Lipo OK waiting of voltage Counter 10 < ");
+      SerialCom->println(counter_lipo_voltage_ok);
+      counter_lipo_voltage_ok++;
+      if (counter_lipo_voltage_ok > 10) { //Making sure lipo voltage is stable
         counter_lipo_voltage_ok = 0;
+        enable_motors();
+        SerialCom->println("Lipo OK returning to RUN STATE");
+        return RUNNING;
       }
-    #endif
+    } else
+    {
+      counter_lipo_voltage_ok = 0;
+    }
+#endif
   }
   return STOPPED;
 }
 
-void fast_flash_double_LED_builtin() {
+void fast_flash_double_LED_builtin()
+{
   static byte indexer = 0;
   static unsigned long fast_flash_millis;
   if (millis() > fast_flash_millis) {
@@ -381,9 +203,8 @@ void fast_flash_double_LED_builtin() {
   }
 }
 
-
-
-void slow_flash_LED_builtin() {
+void slow_flash_LED_builtin()
+{
   static unsigned long slow_flash_millis;
   if (millis() - slow_flash_millis > 2000) {
     slow_flash_millis = millis();
@@ -391,7 +212,8 @@ void slow_flash_LED_builtin() {
   }
 }
 
-void speed_change_smooth() {
+void speed_change_smooth()
+{
   speed_val += speed_change;
   if (speed_val > 1000)
     speed_val = 1000;
@@ -399,7 +221,8 @@ void speed_change_smooth() {
 }
 
 #ifndef NO_BATTERY_V_OK
-boolean is_battery_voltage_OK() {
+boolean is_battery_voltage_OK()
+{
   static byte Low_voltage_counter;
   static unsigned long previous_millis;
 
@@ -446,7 +269,8 @@ boolean is_battery_voltage_OK() {
 #endif
 
 #ifndef NO_HC-SR04
-void HC_SR04_range() {
+void HC_SR04_range()
+{
   unsigned long t1;
   unsigned long t2;
   unsigned long pulse_width;
@@ -503,20 +327,23 @@ void HC_SR04_range() {
 }
 #endif
 
-void Analog_Range_A4() {
+void Analog_Range_A4()
+{
   SerialCom->print("Analog Range A4:");
   SerialCom->println(analogRead(A4));
 }
 
 #ifndef NO_READ_GYRO
-void GYRO_reading() {
+void GYRO_reading()
+{
   SerialCom->print("GYRO A3:");
   SerialCom->println(analogRead(A3));
 }
 #endif
 
 //Serial command pasing
-void read_serial_command() {
+void read_serial_command()
+{
   if (SerialCom->available()) {
     char val = SerialCom->read();
     SerialCom->print("Speed:");
@@ -565,15 +392,6 @@ void read_serial_command() {
         speed_change = 100;
         SerialCom->println("+");
         break;
-      case 'p':
-      case 'P':
-        w[0] = 0;
-        w[3] = 0;
-        w[2] = 0;
-        w[1] = 0;
-       
-        SerialCom->println("PAUSED");
-       break;
       default:
         stop();
         SerialCom->println("stop");
@@ -663,134 +481,6 @@ void strafe_right ()
   right_font_motor.writeMicroseconds(1500 + speed_val);
 }
 
-/*
-   _____ _    _  _____ _______ ____  __  __            ______ _    _ _   _  _____ _______ _____ ____  _   _  _____ 
-  / ____| |  | |/ ____|__   __/ __ \|  \/  |          |  ____| |  | | \ | |/ ____|__   __|_   _/ __ \| \ | |/ ____|
- | |    | |  | | (___    | | | |  | | \  / |  ______  | |__  | |  | |  \| | |       | |    | || |  | |  \| | (___  
- | |    | |  | |\___ \   | | | |  | | |\/| | |______| |  __| | |  | | . ` | |       | |    | || |  | | . ` |\___ \ 
- | |____| |__| |____) |  | | | |__| | |  | |          | |    | |__| | |\  | |____   | |   _| || |__| | |\  |____) |
-  \_____|\____/|_____/   |_|  \____/|_|  |_|          |_|     \____/|_| \_|\_____|  |_|  |_____\____/|_| \_|_____/ 
-                                                                                                                   
-*/                                                                                                                   
-
-//This function powers the motors with the required motor speeds
-void driveMotors() {
-    left_font_motor.writeMicroseconds(1500 + w[0]);
-    right_font_motor.writeMicroseconds(1500 - w[1]);
-    left_rear_motor.writeMicroseconds(1500 + w[2]);
-    right_rear_motor.writeMicroseconds(1500 - w[3]);
-}
-
-//This function is used to get the distance measured by a particular IR Sensor
-//Input: int sensor_number - number between 0 - 2 to represent the sensor you want to read
-//Output: the distance read by the sensor
-double sensorReading(int sensorNumber){
-
-  int signalADC = analogRead(irSensor[sensorNumber]);   // the read out is a signal from 0-1023 corresponding to 0-5v
-
-  if(signalADC == 0) {
-    signalADC = 1;
-  }
-
-  double distance = sensorConstant[sensorNumber]*pow(signalADC, sensorPow[sensorNumber]);  // calculate the distance using the calibrated graph
-  double newEstimate = distance*KALMAN_CONSTANT+(1-KALMAN_CONSTANT)*prevEstimate[sensorNumber] + 8;//as per lectures kalman filter
-
-  prevEstimate[sensorNumber]=newEstimate;
-  return newEstimate;
-} 
-
-
-//TODO Combine x, y and r controller
-void motorController(double ex, double ey, double er, double motorPower[4]) {
-   double V[3] = {0.0, 0.0, 0.0}; //x, y, r
-  
-  //X Controller
-  runningEx = runningEx + ex;
-  V[0] = ex*KP_X + runningEx*KI_X + (ex - prevEx)*KD_X;
-  prevEx = ex;
-
-
-  //Y Controller
-  runningEy = runningEy + ey;
-  V[1] = ey*KP_Y + runningEy*KI_Y + (ey - prevEy)*KD_Y;
-  prevEy = ey;
-
-  //R Controller
-  runningEr = runningEr + er;
-  V[2] = er*KP_R + runningEr*KI_R + (er - prevEr)*KD_R;
-  prevEr = er;
-
-  if(V[0] > 400) {
-    V[0] = 400;
-  } else if (V[0] < -400) {
-    V[0] = -400;
-  }
-  
-  SerialCom->println("Velocities:");
-  SerialCom->println(V[0]);
-  SerialCom->println(V[1]);
-  SerialCom->println(V[2]);
-  
-  getMotorPower(V,motorPower);
-}
 
 
 
-void getMotorPower(double V[3] ,double motorPower[4]) {
-
-  
- /* for(int j = 0; j < 4; j++) {// rows
-    for (int i = 0; i < 3; i++) { // columns
-          
-        motorPower[j] = motorPower[j] + ((kinematicArray[j][i]*V[i])/R);
-     
-    }
-  }*/
-
-  motorPower[0] = (V[0] + V[1] - ((L1+L2)*V[2]))/R; //These should be converted to values
-  motorPower[1] = (V[0] - V[1] + ((L1+L2)*V[2]))/R;
-  motorPower[2] = (V[0] - V[1] - ((L1+L2)*V[2]))/R;
-  motorPower[3] = (V[0] + V[1] + ((L1+L2)*V[2]))/R;
-  
-  for(int k = 0; k < 4; k++) {
-    
-    if(motorPower[k] > 200 ) {
-      motorPower[k] = 200;
-      SerialCom->println("SATURATE!!!");
-    } else if (motorPower[k] < -200) {
-      motorPower[k] = -200;
-      SerialCom->println("SATURATE!!!");
-    }
-    
-  }
-}
-
-void convertToCOordinate(/*r1,r2,r3*/){
-  //logic convert x,y,theta (move forward or align)
-}
-
-double convertToAngle(/*r1*/){
-
-  //logic to turn angle
-}
-
-void readIR(){
-  distanceIR1 = sensorReading(0);
-  
-  distanceIR2 = sensorReading(1);
-  
-  distanceIR3 = sensorReading(2);
-
- /* if(distanceIR1 > 700) {
-    distanceIR1 = -1;
-  }
-
-  if(distanceIR2 > 700) {
-    distanceIR2 = -1;
-  }
-
-  if(distanceIR3 > 2000) {
-    distanceIR3 = -1;
-  }*/
-
-}
