@@ -43,6 +43,9 @@
 #define R 2.75
 #define L2 7.5
 #define L1 8.75
+#define D_side_sensor 10
+#define D_y 7.5
+#define D_x 1
 
 
 double runningEx = 0.00;
@@ -72,7 +75,8 @@ int wallCtr = 0;
 
 
 //IR SENSOR VARIABLE
-#define KALMAN_CONSTANT 1
+#define sensorNoise 1
+#define processNoise 1
 int irSensor[3] = {A2,A3,A4} ;     //sensor is attached
 double prevEstimate[3]={0.0, 0.0, 0.0};
 double sensorConstant[3]={36291, 36731, 36317};
@@ -100,7 +104,8 @@ int irsensor = A2;     //sensor is attached on pinA0
 byte serialRead = 0;  //for control serial communication 
 int signalADC = 0;  // the read out signal in 0-1023 corresponding to 0-5v 
 //VARIABLE ARRAY[X,Y,THETA]
-double coordinte[3]={0.0,0.0,0.0};
+double coordinate[3]={0.0,0.0,0.0};  //0: X, 1: Y, 2: Angle
+double starting_distance;
 
 
 //Default ultrasonic ranging sensor pins, these pins are defined my the Shield
@@ -192,14 +197,22 @@ STATE runningAlign() {
   fast_flash_double_LED_builtin();
 
   if (millis() - previous_millis > 500) {  //Arduino style 500ms timed execution statement
-
-    readIR(); //READ THE IR SENSOR
     previous_millis = millis();
 
+    readIR(); //READ THE IR SENSOR
+    convertToCoordinate(distanceIR1, distanceIR2, distanceIR3);
 
-    // Poll the ir sensors, and run the controller with target angle = 0. 
-    // Set aligned = true, if angle error is close to 0
-    // could create a timeout to ensure controller is settled
+    //ERROR CALCULATION
+    double errorX = 0.0;
+    double errorY = 150 - coordinate[1]; // change to 15 - length from sensor to middle of robot
+    double errorAngle = 0 - coordinate[2];
+
+    motorController(errorX, errorY, errorAngle,w);
+    driveMotors();
+
+    if(errorAngle == 0.0 && errorY == 0.0) { //change to range
+      aligned = true;
+    }
 
   }
 
@@ -222,12 +235,23 @@ STATE runningForward() {
   fast_flash_double_LED_builtin();
 
   if (millis() - previous_millis > 500) {  //Arduino style 500ms timed execution statement
-
-    readIR(); //READ THE IR SENSOR
     previous_millis = millis();
+    
+    readIR(); //READ THE IR SENSOR
+    convertToCoordinate(distanceIR1, distanceIR2, distanceIR3);
 
-    // Poll the ir sensors, and run the controller with target angle = 0, target x and y = 15cm - dimension of vehicle
-    // Set completed = true, if y error is close to 0
+    //ERROR CALCULATION
+    double errorX = 150 - coordinate[0]; // change to 15 - length from sensor to middle of robot
+    double errorY = 150 - coordinate[1]; // change to 15 - length from sensor to middle of robot
+    double errorAngle = 0 - coordinate[2];
+
+    motorController(errorX, errorY, errorAngle,w);
+    driveMotors();
+
+    if(errorX == 0.0 && errorY == 0.0 && errorAngle == 0.0) { //set this to a range
+      completed = true;
+    }
+
 
   }
 
@@ -235,6 +259,7 @@ STATE runningForward() {
   if (!is_battery_voltage_OK()) return STOPPED;
 
   if(completed && wallCtr < 4) {
+    starting_distance=coordinate[0];
     return RUNNING_TURNING;
   } else if (completed && wallCtr > 3) {
     return STOPPED;  //could create custom end state?
@@ -251,11 +276,24 @@ STATE runningTurning() {
   fast_flash_double_LED_builtin();
 
   if (millis() - previous_millis > 500) {  //Arduino style 500ms timed execution statement
-
-    readIR(); //READ THE IR SENSOR
     previous_millis = millis();
 
-    // ask salim and ahmad
+
+    readIR(); //READ THE IR SENSOR
+
+    //ERROR CALCULATION
+    double errorAngle = 75 - convertToAngle(distanceIR3);
+    double errorX = 0.0;
+    double errorY = 0.0;
+
+    motorController(errorX, errorY, errorAngle,w);
+    driveMotors();
+
+    if(errorAngle == 0.0) {  //give range of acceptable stop points
+      completed = 0;
+      aligned = 0;
+      return RUNNING_ALIGN;
+    }
   }
 
 
@@ -264,16 +302,12 @@ STATE runningTurning() {
 
 
 
-  if(false /*angle reached for turn*/) {
-    completed = 0;
-    aligned = 0;
-    return RUNNING_ALIGN;
-  }
+
 
   return RUNNING_TURNING;
 }
 
-STATE running() {
+/* STATE running() {
 
   static unsigned long previous_millis; //this is the dumbest shit ever
 
@@ -292,7 +326,7 @@ STATE running() {
       er = 0;
     } else {
        ey = ((distanceIR1 + distanceIR2)/2) - 77.5;
-       er = distanceIR2 - distanceIR1;
+       er = distanceIR2 - distanceIR1; //cw neg angle
     }
     
     if(distanceIR3 == -1) {
@@ -330,7 +364,7 @@ STATE running() {
   }
 
   return RUNNING;
-}
+} */
 
 //Stop of Lipo Battery voltage is too low, to protect Battery
 STATE stopped() {
@@ -355,7 +389,7 @@ STATE stopped() {
           counter_lipo_voltage_ok = 0;
           enable_motors();
           SerialCom->println("Lipo OK returning to RUN STATE");
-          return RUNNING;
+          return RUNNING_ALIGN;  // Stopped isnt an actual stopped state, it is just for battery problems, and will automatically exit when battery problem is resolved. Should return previous state.
         }
       } else {
         counter_lipo_voltage_ok = 0;
@@ -693,7 +727,7 @@ double sensorReading(int sensorNumber){
   }
 
   double distance = sensorConstant[sensorNumber]*pow(signalADC, sensorPow[sensorNumber]);  // calculate the distance using the calibrated graph
-  double newEstimate = distance*KALMAN_CONSTANT+(1-KALMAN_CONSTANT)*prevEstimate[sensorNumber] + 8;//as per lectures kalman filter
+  double newEstimate = kalman_Filter(distance, sensorNumber);//as per lectures kalman filter
 
   prevEstimate[sensorNumber]=newEstimate;
   return newEstimate;
@@ -765,22 +799,39 @@ void getMotorPower(double V[3] ,double motorPower[4]) {
   }
 }
 
-void convertToCOordinate(/*r1,r2,r3*/){
-  //logic convert x,y,theta (move forward or align)
+void convertToCoordinate(double reading_1,double reading_2,double reading_3){ //for align (error x =0) and follow (calc all errors)
+  coordinate[2]=atan((reading_1-reading_2)/D_side_sensor);  //pos cw
+  coordinate[1]=(((reading_1+reading_2)/2)+D_y)*cos(coordinate[2]);
+  coordinate[0]=(reading_3+D_x)*cos(coordinate[2]);
 }
 
-double convertToAngle(/*r1*/){
-
-  //logic to turn angle
+double convertToAngle(double front_reading){ //for runningTurning, returns the angle (dont use coordinate[2]) and set errorx and y to 0
+  double hypotenuse=D_x+front_reading;
+  double theta=acos(starting_distance/hypotenuse)*RAD_TO_DEG;
+  return theta;
 }
 
+double kalman_Filter(double newData,int sensorNumber){
+  double newEstimate, kalmanGain,meanInitial, varianceInitial;
+  //prediction
+  meanInitial=prevEstimate[sensorNumber];
+  varianceInitial=prevVariance[sensorNumber]+processNoise;  //prevVariance never declared?
+  //Correction
+  kalmanGain=varianceInitial/(varianceInitial+sensorNoise);
+  newEstimate=meanInitial+kalmanGain*(newData-meanInitial);
+  prevVariance[sensorNumber]=(1-kalmanGain)*varianceInitial;
+  return newEstimate;
+}
+
+// Should implement -1 value for when sensor is out of range
 void readIR(){
-  distanceIR1 = sensorReading(0);
+  distanceIR1 = sensorReading(0); //Check sensor order
   
   distanceIR2 = sensorReading(1);
   
   distanceIR3 = sensorReading(2);
 
+ 
  /* if(distanceIR1 > 700) {
     distanceIR1 = -1;
   }
