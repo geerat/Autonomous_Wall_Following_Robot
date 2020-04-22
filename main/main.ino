@@ -207,7 +207,7 @@ STATE runningAlign() {
     double errorY = 150 - coordinate[1]; // change to 15 - length from sensor to middle of robot
     double errorAngle = 0 - coordinate[2];
 
-    motorController(errorX, errorY, errorAngle,w);
+    motorController(errorX, errorY, errorAngle);
     driveMotors();
 
     if(errorAngle == 0.0 && errorY == 0.0) { //change to range
@@ -245,7 +245,7 @@ STATE runningForward() {
     double errorY = 150 - coordinate[1]; // change to 15 - length from sensor to middle of robot
     double errorAngle = 0 - coordinate[2];
 
-    motorController(errorX, errorY, errorAngle,w);
+    motorController(errorX, errorY, errorAngle);
     driveMotors();
 
     if(errorX == 0.0 && errorY == 0.0 && errorAngle == 0.0) { //set this to a range
@@ -286,7 +286,7 @@ STATE runningTurning() {
     double errorX = 0.0;
     double errorY = 0.0;
 
-    motorController(errorX, errorY, errorAngle,w);
+    motorController(errorX, errorY, errorAngle);
     driveMotors();
 
     if(errorAngle == 0.0) {  //give range of acceptable stop points
@@ -734,8 +734,8 @@ double sensorReading(int sensorNumber){
 } 
 
 
-//TODO Combine x, y and r controller
-void motorController(double ex, double ey, double er, double motorPower[4]) {
+//TODO Combine x, y and r controller //change name
+void motorController(double ex, double ey, double er) {
    double V[3] = {0.0, 0.0, 0.0}; //x, y, r
   
   //X Controller
@@ -765,34 +765,34 @@ void motorController(double ex, double ey, double er, double motorPower[4]) {
   SerialCom->println(V[1]);
   SerialCom->println(V[2]);
   
-  getMotorPower(V,motorPower);
+  getMotorPower(V);
 }
 
 
 
-void getMotorPower(double V[3] ,double motorPower[4]) {
+void getMotorPower(double V[3]) {
 
   
  /* for(int j = 0; j < 4; j++) {// rows
     for (int i = 0; i < 3; i++) { // columns
           
-        motorPower[j] = motorPower[j] + ((kinematicArray[j][i]*V[i])/R);
+        w[j] = w[j] + ((kinematicArray[j][i]*V[i])/R);
      
     }
   }*/
 
-  motorPower[0] = (V[0] + V[1] - ((L1+L2)*V[2]))/R; //These should be converted to values
-  motorPower[1] = (V[0] - V[1] + ((L1+L2)*V[2]))/R;
-  motorPower[2] = (V[0] - V[1] - ((L1+L2)*V[2]))/R;
-  motorPower[3] = (V[0] + V[1] + ((L1+L2)*V[2]))/R;
+  w[0] = (V[0] + V[1] - ((L1+L2)*V[2]))/R; //These should be converted to values
+  w[1] = (V[0] - V[1] + ((L1+L2)*V[2]))/R;
+  w[2] = (V[0] - V[1] - ((L1+L2)*V[2]))/R;
+  w[3] = (V[0] + V[1] + ((L1+L2)*V[2]))/R;
   
   for(int k = 0; k < 4; k++) {
     
-    if(motorPower[k] > 200 ) {
-      motorPower[k] = 200;
+    if(w[k] > 200 ) {
+      w[k] = 200;
       SerialCom->println("SATURATE!!!");
-    } else if (motorPower[k] < -200) {
-      motorPower[k] = -200;
+    } else if (w[k] < -200) {
+      w[k] = -200;
       SerialCom->println("SATURATE!!!");
     }
     
