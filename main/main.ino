@@ -21,77 +21,76 @@
 
 #include <Servo.h>  //Need for Servo pulse output
 
-#define NO_READ_GYRO  //Uncomment of GYRO is not attached.
-#define NO_HC-SR04 //Uncomment of HC-SR04 ultrasonic ranging sensor is not attached.
 //#define NO_BATTERY_V_OK //Uncomment of BATTERY_V_OK if you do not care about battery damage.
 
-
-// CONTROLLER VARIABLES
-
+// Controller gains
 #define KP_X 1
-#define KI_X 0
+#define KI_X 0.05
 #define KD_X 0.0
-
 #define KP_Y 3
-#define KI_Y 0
-#define KD_Y 0
-
-#define KP_R 0.3
-#define KI_R 0
+#define KI_Y 0.05
+#define KD_Y 0.05
+#define KP_R 300
+#define KI_R 1
 #define KD_R 0
+//////////////
 
-#define R 2.75
-#define L2 7.5
-#define L1 8.75
-#define D_side_sensor 10
-#define D_y 7.5
-#define D_x 1
+//Distance constants
+#define R 0.3636 // Inverse of radius of wheels
+#define L 16.25 // L2 + L3
+#define D_side_sensor 10 // L1
+#define D_y 7.5 // L2
+#define D_x 1   // L3
+//////////////
 
-
+// Global variables for controller calculation
 double runningEx = 0.00;
 double prevEx = 0.00;
-
 double runningEy = 0.00;
 double prevEy = 0.00;
+double runningEtheta = 0.00;
+double prevEtheta = 0.00;
+//////////////
 
-double runningEr = 0.00;
-double prevEr = 0.00;
+double w[4]={0,0,0,0}; // Motor power values
+double ex, ey, etheta = 0; // Errors for each direction
 
-double w[4]={0,0,0,0};
-double ex, ey, er = 0;
-
-double distanceIR1 = 0;
-double distanceIR2 = 0;
-double distanceIR3 = 0;
-
-////
-
-///FSM VARIABLES///
+// FSM global variables
 bool aligned = false;
-bool completed = false;
+bool wallCompleted = false;
 int wallCtr = 0;
+//////////////
 
-////////////////////
-
-
-//IR SENSOR VARIABLE
+//IR sensor global variables
+double distanceIR1 = 0;   // Front left IR sensor
+double distanceIR2 = 0;   // Back left IR sensor
+double distanceIR3 = 0;   // Front IR sensor
 #define sensorNoise 1
 #define processNoise 1
-int irSensor[3] = {A2,A3,A4} ;     //sensor is attached
-double prevEstimate[3]={0.0, 0.0, 0.0};
-double sensorConstant[3]={36291, 36731, 36317};
+int irSensor[3] = {A2,A3,A4};  // Pin for each sensor
+double sensorConstant[3]={36291, 36731, 36317}; 
 double sensorPow[3]={-1.11, -1.106, -0.89};
+int signalADC = 0;  // The read ADC signal in 0-1023 corresponding to 0-5v 
 
-//
+double prevEstimate[3]={0.0, 0.0, 0.0};
+double prevVariance[3]={0.0, 0.0, 0.0};
+//////////////
 
-//State machine states
+// Coordinate system global variables
+double coordinate[3]={0.0,0.0,0.0};  //0: X, 1: Y, 2: Theta
+double startingDistance; // used for turning state
+//////////////
+
+//FSM states
 enum STATE {
   INITIALISING,
   RUNNING_FORWARD,
   RUNNING_TURNING,
   RUNNING_ALIGN,
-  STOPPED
+  STOPPED,
+  COMPLETED
 };
+STATE previousState = RUNNING_FORWARD;
 
 //Refer to Shield Pinouts.jpg for pin locations
 
@@ -100,13 +99,6 @@ const byte left_front = 46;
 const byte left_rear = 47;
 const byte right_rear = 50;
 const byte right_front = 51;
-int irsensor = A2;     //sensor is attached on pinA0
-byte serialRead = 0;  //for control serial communication 
-int signalADC = 0;  // the read out signal in 0-1023 corresponding to 0-5v 
-//VARIABLE ARRAY[X,Y,THETA]
-double coordinate[3]={0.0,0.0,0.0};  //0: X, 1: Y, 2: Angle
-double starting_distance;
-
 
 //Default ultrasonic ranging sensor pins, these pins are defined my the Shield
 const int TRIG_PIN = 48;
@@ -119,8 +111,6 @@ Servo left_font_motor;  // create servo object to control Vex Motor Controller 2
 Servo left_rear_motor;  // create servo object to control Vex Motor Controller 29
 Servo right_rear_motor;  // create servo object to control Vex Motor Controller 29
 Servo right_font_motor;  // create servo object to control Vex Motor Controller 29
-Servo turret_motor;
-
 
 int speed_val = 100;
 int speed_change;
@@ -128,10 +118,8 @@ int speed_change;
 //Serial Pointer
 HardwareSerial *SerialCom;
 
-int pos = 0;
 void setup(void)
 {
-  turret_motor.attach(11);
   pinMode(LED_BUILTIN, OUTPUT);
 
   // The Trigger pin will tell the sensor to range find
@@ -146,7 +134,6 @@ void setup(void)
   SerialCom->println("Setup....");
 
   delay(1000); //settling time but no really needed
-
 }
 
 void loop(void) //main loop
@@ -154,8 +141,7 @@ void loop(void) //main loop
   
   static STATE machine_state = INITIALISING;
   //Finite-state machine Code
-  switch (machine_state) {
-    
+  switch (machine_state) {  
     case INITIALISING:
       machine_state = initialising();
       break;
@@ -168,15 +154,14 @@ void loop(void) //main loop
     case RUNNING_ALIGN:
       machine_state = runningAlign();
       break;
-   /* case RUNNING: //Lipo Battery Volage OK
-      machine_state =  running();
-      break;*/
     case STOPPED: //Stop of Lipo Battery voltage is too low, to protect Battery
       machine_state =  stopped();
       break;
+    case COMPLETED:
+      machine_state = completed();
+      break;
   };
 }
-
 
 STATE initialising() {
   //initialising
@@ -185,42 +170,41 @@ STATE initialising() {
   SerialCom->println("Enabling Motors...");
   enable_motors();
   SerialCom->println("RUNNING STATE...");
-
-  
   return RUNNING_ALIGN;
 }
 
 STATE runningAlign() {
 
-  static unsigned long previous_millis; //this is the dumbest shit ever
+  static unsigned long previous_millis; 
 
   fast_flash_double_LED_builtin();
 
-  if (millis() - previous_millis > 500) {  //Arduino style 500ms timed execution statement
+  if (millis() - previous_millis > 300) {  //Arduino style 300ms timed execution statement
     previous_millis = millis();
 
     readIR(); //READ THE IR SENSOR
     convertToCoordinate(distanceIR1, distanceIR2, distanceIR3);
 
     //ERROR CALCULATION
-    double errorX = 0.0;
-    double errorY = 150 - coordinate[1]; // change to 15 - length from sensor to middle of robot
-    double errorAngle = 0 - coordinate[2];
+    double errorX = 0.0; // disable x direction controller by forcing x error to always 0 
+    double errorY = 150 - D_y - coordinate[1]; // 15cm - length from sensor to middle of robot is reference
+    double errorAngle = 0 - coordinate[2]; // 0 reference to align with wall
 
     motorController(errorX, errorY, errorAngle);
     driveMotors();
 
-    if(errorAngle == 0.0 && errorY == 0.0) { //change to range
+    // Criteria for robot to be aligned
+    if(abs(errorAngle) <= 4*DEG_TO_RAD && abs(errorY) <= 5.0) { 
       aligned = true;
     }
 
   }
 
-
+  previousState = RUNNING_ALIGN;
   if (!is_battery_voltage_OK()) return STOPPED;
 
   if(aligned) {
-    wallCtr++;
+    wallCtr++; // increment the wall counter, since wall is about to be traversed
     return RUNNING_FORWARD;
   }
 
@@ -230,39 +214,41 @@ STATE runningAlign() {
 
 STATE runningForward() {
 
-  static unsigned long previous_millis; //this is the dumbest shit ever
+  static unsigned long previous_millis;
 
   fast_flash_double_LED_builtin();
 
-  if (millis() - previous_millis > 500) {  //Arduino style 500ms timed execution statement
+  if (millis() - previous_millis > 300) {  //Arduino style 300 ms timed execution statement
     previous_millis = millis();
     
     readIR(); //READ THE IR SENSOR
     convertToCoordinate(distanceIR1, distanceIR2, distanceIR3);
 
     //ERROR CALCULATION
-    double errorX = 150 - coordinate[0]; // change to 15 - length from sensor to middle of robot
-    double errorY = 150 - coordinate[1]; // change to 15 - length from sensor to middle of robot
-    double errorAngle = 0 - coordinate[2];
+    double errorX = 150 - D_x - coordinate[0]; // 15cm - length from sensor to middle of robot is reference
+    double errorY = 150 - D_y - coordinate[1]; // 15cm - length from sensor to middle of robot is reference
+    double errorAngle = 0 - coordinate[2]; // theta 0 degree reference to keep alignment with wall
 
     motorController(errorX, errorY, errorAngle);
     driveMotors();
 
-    if(errorX == 0.0 && errorY == 0.0 && errorAngle == 0.0) { //set this to a range
-      completed = true;
+    //Exit case once wall following is completed within a 5 mm margin of error
+    if(abs(errorX) <= 5.0 && abs(errorY) <= 5.0 && abs(errorAngle) <= 4*DEG_TO_RAD) { 
+      wallCompleted = true;
     }
-
-
   }
 
-
+  previousState = RUNNING_FORWARD;
   if (!is_battery_voltage_OK()) return STOPPED;
 
-  if(completed && wallCtr < 4) {
-    starting_distance=coordinate[0];
+
+  // Once wall follow is completed, if four walls have already been traversed go to the completed state,
+  // otherwise go to the turning state.
+  if(wallCompleted && wallCtr < 4) {
+    startingDistance=coordinate[0];
     return RUNNING_TURNING;
-  } else if (completed && wallCtr > 3) {
-    return STOPPED;  //could create custom end state?
+  } else if (wallCompleted && wallCtr > 3) {
+    return COMPLETED; 
   }
 
   return RUNNING_FORWARD;
@@ -275,96 +261,37 @@ STATE runningTurning() {
 
   fast_flash_double_LED_builtin();
 
-  if (millis() - previous_millis > 500) {  //Arduino style 500ms timed execution statement
+  if (millis() - previous_millis > 300) {  //Arduino style 300 ms timed execution statement
     previous_millis = millis();
-
 
     readIR(); //READ THE IR SENSOR
 
     //ERROR CALCULATION
-    double errorAngle = 75 - convertToAngle(distanceIR3);
-    double errorX = 0.0;
-    double errorY = 0.0;
+    // use the convertToAngle function to find phi, and use this along with reference of 75deg in radians for error calculation
+    double errorAngle = 75*DEG_TO_RAD - convertToAngle(distanceIR3); 
+    double errorX = 0.0; // disable controller in x direction
+    double errorY = 0.0; // disable controller in y direction
 
     motorController(errorX, errorY, errorAngle);
     driveMotors();
 
-    if(errorAngle == 0.0) {  //give range of acceptable stop points
-      completed = 0;
+    // criteria for moving to align state
+    if(abs(errorAngle) <= 4*DEG_TO_RAD) { 
+      wallCompleted = false;
       aligned = 0;
       return RUNNING_ALIGN;
     }
   }
 
-
-
+  previousState = RUNNING_TURNING;
   if (!is_battery_voltage_OK()) return STOPPED; // check battery level
-
-
-
-
 
   return RUNNING_TURNING;
 }
 
-/* STATE running() {
-
-  static unsigned long previous_millis; //this is the dumbest shit ever
-
-  read_serial_command(); //removing keyboard control
-  fast_flash_double_LED_builtin();
-
-  if (millis() - previous_millis > 500) {  //Arduino style 500ms timed execution statement
-
-    readIR(); //READ THE IR SENSOR
-    
-    previous_millis = millis();
-
-    //Calculate errors
-    if(distanceIR1 == -1 || distanceIR2 == -1) {
-      ey = 0;
-      er = 0;
-    } else {
-       ey = ((distanceIR1 + distanceIR2)/2) - 77.5;
-       er = distanceIR2 - distanceIR1; //cw neg angle
-    }
-    
-    if(distanceIR3 == -1) {
-      ex = 0;
-    } else {
-      ex = 150 - distanceIR3;
-    }
-
-    motorController(ex, ey, er,w);
-
-    driveMotors();
-
-    Analog_Range_A4();
-
-    #ifndef NO_READ_GYRO
-      GYRO_reading();
-    #endif
-
-    #ifndef NO_HC-SR04
-      HC_SR04_range();
-    #endif
-
-    #ifndef NO_BATTERY_V_OK
-        if (!is_battery_voltage_OK()) return STOPPED;
-    #endif
-
-
-    turret_motor.write(pos); //leaving all turret motor stuff out
-
-    if (pos == 0) {
-      pos = 45;
-    } else {
-      pos = 0;
-    }
-  }
-
-  return RUNNING;
-} */
+STATE completed() {
+  return COMPLETED;
+}
 
 //Stop of Lipo Battery voltage is too low, to protect Battery
 STATE stopped() {
@@ -389,7 +316,7 @@ STATE stopped() {
           counter_lipo_voltage_ok = 0;
           enable_motors();
           SerialCom->println("Lipo OK returning to RUN STATE");
-          return RUNNING_ALIGN;  // Stopped isnt an actual stopped state, it is just for battery problems, and will automatically exit when battery problem is resolved. Should return previous state.
+          return previousState;  // Return to the previous state to continue running
         }
       } else {
         counter_lipo_voltage_ok = 0;
@@ -414,8 +341,6 @@ void fast_flash_double_LED_builtin() {
     }
   }
 }
-
-
 
 void slow_flash_LED_builtin() {
   static unsigned long slow_flash_millis;
@@ -479,75 +404,12 @@ boolean is_battery_voltage_OK() {
 }
 #endif
 
-#ifndef NO_HC-SR04
-void HC_SR04_range() {
-  unsigned long t1;
-  unsigned long t2;
-  unsigned long pulse_width;
-  float cm;
-  float inches;
-
-  // Hold the trigger pin high for at least 10 us
-  digitalWrite(TRIG_PIN, HIGH);
-  delayMicroseconds(10);
-  digitalWrite(TRIG_PIN, LOW);
-
-  // Wait for pulse on echo pin
-  t1 = micros();
-  while ( digitalRead(ECHO_PIN) == 0 ) {
-    t2 = micros();
-    pulse_width = t2 - t1;
-    if ( pulse_width > (MAX_DIST + 1000)) {
-      SerialCom->println("HC-SR04: NOT found");
-      return;
-    }
-  }
-
-  // Measure how long the echo pin was held high (pulse width)
-  // Note: the micros() counter will overflow after ~70 min
-
-  t1 = micros();
-  while ( digitalRead(ECHO_PIN) == 1)
-  {
-    t2 = micros();
-    pulse_width = t2 - t1;
-    if ( pulse_width > (MAX_DIST + 1000) ) {
-      SerialCom->println("HC-SR04: Out of range");
-      return;
-    }
-  }
-
-  t2 = micros();
-  pulse_width = t2 - t1;
-
-  // Calculate distance in centimeters and inches. The constants
-  // are found in the datasheet, and calculated from the assumed speed
-  //of sound in air at sea level (~340 m/s).
-  cm = pulse_width / 58.0;
-  inches = pulse_width / 148.0;
-
-  // Print out results
-  if ( pulse_width > MAX_DIST ) {
-    SerialCom->println("HC-SR04: Out of range");
-  } else {
-    SerialCom->print("HC-SR04:");
-    SerialCom->print(cm);
-    SerialCom->println("cm");
-  }
-}
-#endif
-
 void Analog_Range_A4() {
   SerialCom->print("Analog Range A4:");
   SerialCom->println(analogRead(A4));
 }
 
-#ifndef NO_READ_GYRO
-void GYRO_reading() {
-  SerialCom->print("GYRO A3:");
-  SerialCom->println(analogRead(A3));
-}
-#endif
+
 
 //Serial command pasing
 void read_serial_command() {
@@ -707,7 +569,8 @@ void strafe_right ()
                                                                                                                    
 */                                                                                                                   
 
-//This function powers the motors with the required motor speeds
+// This function powers the motors with the required motor speeds based on the global angular velocity: w
+// No input or output
 void driveMotors() {
     left_font_motor.writeMicroseconds(1500 + w[0]);
     right_font_motor.writeMicroseconds(1500 - w[1]);
@@ -715,133 +578,120 @@ void driveMotors() {
     right_rear_motor.writeMicroseconds(1500 - w[3]);
 }
 
-//This function is used to get the distance measured by a particular IR Sensor
-//Input: int sensor_number - number between 0 - 2 to represent the sensor you want to read
-//Output: the distance read by the sensor
+// This function is used to get the distance measured by a given IR Sensor
+// Input: sensorNumber : number between 0 - 2 to represent the sensor you want to read (where 0: sensor 1, 1: sensor 2, 2: sensor 3)
+// Output: the distance read by the given sensor
 double sensorReading(int sensorNumber){
-
-  int signalADC = analogRead(irSensor[sensorNumber]);   // the read out is a signal from 0-1023 corresponding to 0-5v
-
-  if(signalADC == 0) {
+  int signalADC = analogRead(irSensor[sensorNumber]);   // the read out is a value from 0-1023 corresponding to 0-5v
+  
+  if(signalADC == 0) { // lift 0 adc to 1
     signalADC = 1;
   }
 
   double distance = sensorConstant[sensorNumber]*pow(signalADC, sensorPow[sensorNumber]);  // calculate the distance using the calibrated graph
-  double newEstimate = kalman_Filter(distance, sensorNumber);//as per lectures kalman filter
+  double newEstimate = kalman_Filter(distance, sensorNumber); // Use kalman filter to calculate better estimate
 
   prevEstimate[sensorNumber]=newEstimate;
   return newEstimate;
 } 
 
 
-//TODO Combine x, y and r controller //change name
-void motorController(double ex, double ey, double er) {
-   double V[3] = {0.0, 0.0, 0.0}; //x, y, r
+// This function acts as the controller, and calculated the required linear velocity (x & y) and angular velocity to reduce the passed error values to zero
+// Input: ex: error in x direction
+//        ey: error in y direction
+//        eTheta: error in theta direction
+void motorController(double ex, double ey, double etheta) {
+  double V[3] = {0.0, 0.0, 0.0}; //Velocity in x, y, theta
   
-  //X Controller
+  // X Controller
   runningEx = runningEx + ex;
   V[0] = ex*KP_X + runningEx*KI_X + (ex - prevEx)*KD_X;
   prevEx = ex;
 
-
-  //Y Controller
+  // Y Controller
   runningEy = runningEy + ey;
   V[1] = ey*KP_Y + runningEy*KI_Y + (ey - prevEy)*KD_Y;
   prevEy = ey;
 
-  //R Controller
-  runningEr = runningEr + er;
-  V[2] = er*KP_R + runningEr*KI_R + (er - prevEr)*KD_R;
-  prevEr = er;
+  // Theta Controller
+  runningEtheta = runningEtheta + etheta;
+  V[2] = etheta*KP_R + runningEtheta*KI_R + (etheta - prevEtheta)*KD_R;
+  prevEtheta = etheta;
 
+  // Saturate the x velocity to max 400
   if(V[0] > 400) {
     V[0] = 400;
   } else if (V[0] < -400) {
     V[0] = -400;
   }
-  
-  SerialCom->println("Velocities:");
-  SerialCom->println(V[0]);
-  SerialCom->println(V[1]);
-  SerialCom->println(V[2]);
-  
-  getMotorPower(V);
+
+  populateWheelVelocities(V); // convert MWR velocities to wheel velocities
 }
 
+// This function converts a passed array of velocities of the MWR to individual wheel angular velocities and stores them in
+// the global array 'w', with no unit
+// Input: array V: velocities of the MWR (0: Vx, 1: Vy, 2: Angular velocity in theta direction)
+void populateWheelVelocities(double V[3]) {
 
-
-void getMotorPower(double V[3]) {
-
+  // Equations derived from the inverse kinematics matrix
+  w[0] = (V[0] + V[1] - (L*V[2])) * R;
+  w[1] = (V[0] - V[1] + (L*V[2])) * R;
+  w[2] = (V[0] - V[1] - (L*V[2])) * R;
+  w[3] = (V[0] + V[1] + (L*V[2])) * R;
   
- /* for(int j = 0; j < 4; j++) {// rows
-    for (int i = 0; i < 3; i++) { // columns
-          
-        w[j] = w[j] + ((kinematicArray[j][i]*V[i])/R);
-     
-    }
-  }*/
-
-  w[0] = (V[0] + V[1] - ((L1+L2)*V[2]))/R; //These should be converted to values
-  w[1] = (V[0] - V[1] + ((L1+L2)*V[2]))/R;
-  w[2] = (V[0] - V[1] - ((L1+L2)*V[2]))/R;
-  w[3] = (V[0] + V[1] + ((L1+L2)*V[2]))/R;
-  
+  // Saturate angular velocities to 200
   for(int k = 0; k < 4; k++) {
-    
     if(w[k] > 200 ) {
       w[k] = 200;
-      SerialCom->println("SATURATE!!!");
     } else if (w[k] < -200) {
       w[k] = -200;
-      SerialCom->println("SATURATE!!!");
     }
-    
   }
 }
 
-void convertToCoordinate(double reading_1,double reading_2,double reading_3){ //for align (error x =0) and follow (calc all errors)
-  coordinate[2]=atan((reading_1-reading_2)/D_side_sensor);  //pos cw
-  coordinate[1]=(((reading_1+reading_2)/2)+D_y)*cos(coordinate[2]);
-  coordinate[0]=(reading_3+D_x)*cos(coordinate[2]);
+
+// This function converts the IR sensor readings into the coordinate system and saves the coordinate system in the global coordinate array (where
+// 0: x , 1: y, 2: theta)
+// Inputs: reading1: distance reading from IR sensor 1
+//         reading2: distance reading from IR sensor 2
+//         reading3: distance reading from IR sensor 3
+void convertToCoordinate(double reading1,double reading2,double reading3){ //for align (error x =0) and follow (calc all errors)
+  coordinate[2]=atan((reading1-reading2)/D_side_sensor);  //pos cw
+  coordinate[1]=(((reading1+reading2)/2)+D_y)*cos(coordinate[2]);
+  coordinate[0]=(reading3+D_x)*cos(coordinate[2]);
 }
 
-double convertToAngle(double front_reading){ //for runningTurning, returns the angle (dont use coordinate[2]) and set errorx and y to 0
-  double hypotenuse=D_x+front_reading;
-  double theta=acos(starting_distance/hypotenuse)*RAD_TO_DEG;
-  return theta;
+// This function converts the reading from the front IR sensor (sensor 3) into phi
+// Inputs: frontReading: distance reading from IR sensor 3
+// Output: the special angle phi, when in runningTurning state
+double convertToAngle(double frontReading){ //for runningTurning, returns the angle (dont use coordinate[2]) and set errorx and y to 0
+  double hypotenuse=D_x+frontReading;
+  double phi=acos(startingDistance/hypotenuse);
+  return phi;
 }
 
-double kalman_Filter(double newData,int sensorNumber){
+// This function applies a kalman filter to a given sensor
+// Inputs: newData: the reading in mm from the IR sensor 
+//         sensorNumber: integer representing the sensor being used (0: IR sensor 1, 1: IR sensor 2, 2: IR sensor 3)
+// Outputs: the result of the kalman filter
+double kalman_Filter(double newData, int sensorNumber){
   double newEstimate, kalmanGain,meanInitial, varianceInitial;
-  //prediction
+  // Prediction
   meanInitial=prevEstimate[sensorNumber];
-  varianceInitial=prevVariance[sensorNumber]+processNoise;  //prevVariance never declared?
-  //Correction
+  varianceInitial=prevVariance[sensorNumber]+processNoise;  
+  // Correction
   kalmanGain=varianceInitial/(varianceInitial+sensorNoise);
   newEstimate=meanInitial+kalmanGain*(newData-meanInitial);
   prevVariance[sensorNumber]=(1-kalmanGain)*varianceInitial;
   return newEstimate;
 }
 
-// Should implement -1 value for when sensor is out of range
+// This function reads all the IR sensors and saves the values in the global variables distanceIR1, distanceIR2 and distanceIR3
 void readIR(){
   distanceIR1 = sensorReading(0); //Check sensor order
   
   distanceIR2 = sensorReading(1);
   
   distanceIR3 = sensorReading(2);
-
- 
- /* if(distanceIR1 > 700) {
-    distanceIR1 = -1;
-  }
-
-  if(distanceIR2 > 700) {
-    distanceIR2 = -1;
-  }
-
-  if(distanceIR3 > 2000) {
-    distanceIR3 = -1;
-  }*/
 
 }
